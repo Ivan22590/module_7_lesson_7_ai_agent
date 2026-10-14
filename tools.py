@@ -345,6 +345,241 @@ def write_file(filepath: str, content: str) -> str:
 
 
 # ================================================================
+# 7. Check Site — аудит сайта по URL
+# ================================================================
+
+@tool
+def check_site(url: str) -> str:
+    """Проверить сайт по URL: скорость, HTTPS, мобильная версия, title/h1,
+    Яндекс.Метрика, формы/телефоны/мессенджеры и оценка N/100.
+
+    Принимает URL (например, https://example.com) и возвращает
+    подробный разбор с рекомендациями.
+    """
+    import re as _re
+
+    try:
+        from bs4 import BeautifulSoup
+    except ImportError:
+        return "Ошибка: не установлена библиотека beautifulsoup4. Установите: pip install beautifulsoup4"
+
+    try:
+        # --- Подготовка URL ---
+        if not url.startswith(("http://", "https://")):
+            url = "https://" + url
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ),
+        }
+
+        checks: list[dict[str, Any]] = []
+        score = 0
+
+        # --- 1. HTTPS ---
+        is_https = url.startswith("https://")
+        score += 15 if is_https else 0
+        checks.append({
+            "name": "HTTPS",
+            "ok": is_https,
+            "detail": "Есть (безопасное соединение)" if is_https else "Отсутствует — браузеры помечают как «Небезопасно»",
+        })
+
+        # --- 2. Загрузка страницы ---
+        resp = requests.get(url, headers=headers, timeout=20, allow_redirects=True)
+        resp.raise_for_status()
+
+        content = resp.text
+        content_length = len(content.encode("utf-8"))
+
+        # --- 3. Вес страницы ---
+        page_weight_kb = content_length / 1024
+        weight_ok = page_weight_kb <= 1500
+        score += 10 if weight_ok else 5
+        weight_str = f"{page_weight_kb:.0f} КБ"
+        checks.append({
+            "name": "Вес страницы",
+            "ok": weight_ok,
+            "detail": f"{weight_str} — {'' if weight_ok else 'Слишком тяжело! Сожмите изображения, уберите лишнее.'}",
+        })
+
+        # --- 4. Мобильная версия (viewport) ---
+        soup = BeautifulSoup(content, "html.parser")
+        viewport = soup.find("meta", attrs={"name": "viewport"})
+        mobile_ok = viewport is not None
+        score += 10 if mobile_ok else 0
+        checks.append({
+            "name": "Мобильная версия (viewport)",
+            "ok": mobile_ok,
+            "detail": "Есть адаптивный viewport" if mobile_ok else "Нет meta viewport — сайт не адаптирован под мобильные",
+        })
+
+        # --- 5. Title ---
+        title_tag = soup.find("title")
+        title = title_tag.get_text(strip=True) if title_tag else ""
+        title_ok = 10 <= len(title) <= 70
+        score += 10 if title_ok else 5
+        checks.append({
+            "name": "Title (заголовок вкладки)",
+            "ok": title_ok,
+            "detail": f"«{title}»" if title else "Отсутствует — критически важно для SEO и кликабельности",
+        })
+
+        # --- 6. H1 ---
+        h1_tags = soup.find_all("h1")
+        h1 = h1_tags[0].get_text(strip=True) if h1_tags else ""
+        h1_ok = len(h1) > 0 and len(h1) <= 100
+        score += 10 if h1_ok else 5
+        checks.append({
+            "name": "H1 (главный заголовок)",
+            "ok": h1_ok,
+            "detail": f"«{h1}»" if h1 else "Отсутствует — на сайте должен быть один главный заголовок с оффером",
+        })
+
+        # --- 7. Яндекс.Метрика ---
+        has_metrika = bool(
+            soup.find("script", src=_re.compile(r"mc\.yandex\.ru"))
+            or soup.find("script", string=_re.compile(r"yaCounter|metrika|mc\.yandex"))
+            or soup.find("div", id=_re.compile(r"ymock|yandex_metr"))
+        )
+        score += 10 if has_metrika else 0
+        checks.append({
+            "name": "Яндекс.Метрика",
+            "ok": has_metrika,
+            "detail": "Установлена" if has_metrika else "Не установлена — вы рекламируетесь вслепую, без аналитики",
+        })
+
+        # --- 8. Формы ---
+        forms = soup.find_all("form")
+        has_forms = len(forms) > 0
+        score += 10 if has_forms else 0
+        checks.append({
+            "name": "Формы заявки",
+            "ok": has_forms,
+            "detail": f"Найдено {len(forms)} форм" if has_forms else "Нет форм — как клиент оставит заявку?",
+        })
+
+        # --- 9. Телефоны ---
+        phone_pattern = _re.compile(r"tel:[\+\d\s\-\(\)]+")
+        phone_tags = soup.find_all("a", href=phone_pattern)
+        has_phones = len(phone_tags) > 0
+        phone_numbers = [a.get("href", "").replace("tel:", "") for a in phone_tags]
+        score += 10 if has_phones else 0
+        checks.append({
+            "name": "Телефоны",
+            "ok": has_phones,
+            "detail": f"Найдены: {', '.join(phone_numbers[:3])}" if has_phones else "Нет кликабельных номеров — клиент должен звонить в один клик",
+        })
+
+        # --- 10. Мессенджеры (WhatsApp, Telegram, Viber) ---
+        messenger_links = []
+        for a in soup.find_all("a", href=True):
+            href = a.get("href", "").lower()
+            if "wa.me" in href or "whatsapp.com" in href:
+                messenger_links.append("WhatsApp")
+            elif "t.me" in href or "telegram.org" in href:
+                messenger_links.append("Telegram")
+            elif "viber://" in href or "viber://chat" in href or "vbsend.com" in href:
+                messenger_links.append("Viber")
+        has_messengers = len(messenger_links) > 0
+        score += 10 if has_messengers else 0
+        checks.append({
+            "name": "Мессенджеры",
+            "ok": has_messengers,
+            "detail": f"Есть: {', '.join(set(messenger_links))}" if has_messengers else "Нет мессенджеров — многие клиенты предпочитают писать, а не звонить",
+        })
+
+        # --- 11. Изображения (оптимизация) ---
+        images = soup.find_all("img")
+        img_count = len(images)
+        missing_alt = sum(1 for img in images if not img.get("alt"))
+        img_ok = img_count == 0 or missing_alt / max(img_count, 1) < 0.3
+        score += 10 if img_ok else 5
+        checks.append({
+            "name": "Изображения",
+            "ok": img_ok,
+            "detail": f"{img_count} шт., без alt: {missing_alt}" if img_count > 0 else "Нет изображений — сайт выглядит пустым",
+        })
+
+        # --- 12. Коды ошибок (проверка статуса) ---
+        status_ok = 200 <= resp.status_code < 300
+        score += 5 if status_ok else 0
+        checks.append({
+            "name": "HTTP-статус",
+            "ok": status_ok,
+            "detail": f"{resp.status_code} OK" if status_ok else f"{resp.status_code} — ошибка или перенаправление",
+        })
+
+        # --- Формирование результата ---
+        parts: list[str] = []
+        parts.append(f"\U0001f50d Аудит сайта: {url}\n")
+        parts.append(f"Итоговая оценка: {score}/100\n")
+        parts.append("\u2500" * 40)
+
+        for c in checks:
+            icon = "\u2705" if c["ok"] else "\u26a0\ufe0f"
+            parts.append(f"{icon} {c['name']}: {c['detail']}")
+
+        # --- Рекомендации (что чинить в первую очередь) ---
+        failures = [c for c in checks if not c["ok"]]
+        if failures:
+            parts.append("\n" + "\u2500" * 40)
+            parts.append("\U0001f6e0\ufe0f Что чинить в первую очередь:\n")
+            priority = 1
+            for c in failures:
+                if c["name"] == "HTTPS":
+                    parts.append(f"  {priority}. Переехать на HTTPS — это база безопасности")
+                elif c["name"] == "Яндекс.Метрика":
+                    parts.append(f"  {priority}. Установить Яндекс.Метрику — без аналитики реклама слепая")
+                elif c["name"] == "Title (заголовок вкладки)":
+                    parts.append(f"  {priority}. Добавить Title — заголовок влияет на кликабельность в поиске")
+                elif c["name"] == "H1 (главный заголовок)":
+                    parts.append(f"  {priority}. Добавить H1 с оффером — это первый экран, который видит клиент")
+                elif c["name"] == "Мобильная версия (viewport)":
+                    parts.append(f"  {priority}. Добавить meta viewport — 70%+ трафика с мобильных")
+                elif c["name"] == "Вес страницы":
+                    parts.append(f"  {priority}. Сжать изображения и контент — медленный сайт теряет клиентов")
+                elif c["name"] == "Формы заявки":
+                    parts.append(f"  {priority}. Добавить форму заявки — клиент должен оставить заявку легко")
+                elif c["name"] == "Телефоны":
+                    parts.append(f"  {priority}. Добавить кликабельный телефон — звонок в один клик")
+                elif c["name"] == "Мессенджеры":
+                    parts.append(f"  {priority}. Добавить кнопки мессенджеров — клиенты хотят писать")
+                elif c["name"] == "Изображения":
+                    parts.append(f"  {priority}. Добавить alt-тексты к изображениям — это SEO")
+                else:
+                    parts.append(f"  {priority}. Исправить: {c['detail']}")
+                priority += 1
+
+        # --- Сводка для ИИ-анализа (title, h1, description) ---
+        meta_desc = soup.find("meta", attrs={"name": "description"})
+        desc_text = meta_desc.get("content", "Нет описания") if meta_desc else "Нет описания"
+        trust_elements = len(soup.find_all("img")) > 0 or len(soup.find_all("a")) > 0
+        text_blocks = len(soup.find_all(["p", "div"]))
+
+        parts.append("\n" + "\u2500" * 40)
+        parts.append("\n\U0001f4ca Сводка для ИИ-анализа:\n")
+        parts.append(f"title: \u00ab{title}\u00bb\n")
+        parts.append(f"h1: \u00ab{h1}\u00bb\n")
+        parts.append(f"description: {desc_text}\n")
+        parts.append(f"количество текстовых блоков: {text_blocks}\n")
+        parts.append(f"есть доверительные элементы: {'Да' if trust_elements else 'Нет'}\n")
+
+        return "\n".join(parts)
+
+    except requests.exceptions.Timeout:
+        return "Ошибка: сайт не отвечает в течение 20 секунд. Проверьте доступность."
+    except requests.exceptions.RequestException as exc:
+        return f"Ошибка загрузки сайта: {exc}"
+    except Exception as exc:
+        logger.error("Ошибка аудита сайта %s: %s", url, exc, exc_info=True)
+        return f"Ошибка проверки сайта: {exc}"
+
+
+# ================================================================
 # Список всех инструментов (для удобного импорта)
 # ================================================================
 
@@ -356,4 +591,5 @@ ALL_TOOLS = [
     generate_qr_code,
     read_file,
     write_file,
+    check_site,
 ]

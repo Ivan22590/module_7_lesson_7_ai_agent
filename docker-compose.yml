@@ -1,0 +1,16 @@
+# ============================================================
+# docker-compose.yml — Telegram AI-агент
+# Запуск: docker compose up -d --build
+# Логи:  docker compose logs -f bot
+# Стоп:  docker compose down
+# ============================================================
+
+services:
+  bot:
+    build: .
+    container_name: tg-ai-agent
+    env_file: .env          # Секреты: TG_BOT_API_KEY, PROXYAPI_API_KEY и др.
+    volumes:
+      # Весь проект на хосте — память (memory_*.json) и QR-коды сохраняются
+      - .:/app
+    restart: unless-stopped
