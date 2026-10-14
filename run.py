@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import html
 import logging
+import re
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
@@ -28,6 +29,34 @@ logger = logging.getLogger(__name__)
 
 # Максимальная длина сообщения в Telegram
 TG_MESSAGE_LIMIT = 4096
+
+
+def _convert_markdown_to_html(text: str) -> str:
+    """
+    Конвертирует MarkdownV2-разметку в HTML.
+
+    Telegram MarkdownV2 → HTML-теги:
+      **bold**    → <b>
+      *italic*    → <i>
+      __underline__ → <u>
+      ~~strikethrough~~ → <s>
+      `code`      → <code>
+      ```block``` → <pre><code>
+    """
+    # Блок кода: ``` ... ```
+    text = re.sub(r'```(.+?)```', r'<pre><code>\1</code></pre>', text, flags=re.DOTALL)
+    # Инлайн-код: ` ... `
+    text = re.sub(r'`([^`]+)`', r'<code>\1</code>', text)
+    # Строчки: ~~ ... ~~
+    text = re.sub(r'~~([^~]+)~~', r'<s>\1</s>', text)
+    # Подчёркивание: __ ... __
+    text = re.sub(r'__([^_]+)__', r'<u>\1</u>', text)
+    # Жирный: ** ... **
+    text = re.sub(r'\*\*([^*]+)\*\*', r'<b>\1</b>', text)
+    # Курсив: * ... *
+    text = re.sub(r'\*([^*]+)\*', r'<i>\1</i>', text)
+
+    return text
 
 
 # ================================================================
@@ -75,8 +104,9 @@ async def handle_message(message: Message, bot: Bot) -> None:
         )
         return
 
-    # Экранируем ответ в HTML, чтобы LLM не сломал разметку
-    safe_answer = html.escape(answer)
+    # Экранируем HTML-символы, затем конвертируем MarkdownV2 → HTML
+    escaped = html.escape(answer)
+    safe_answer = _convert_markdown_to_html(escaped)
 
     # Telegram ограничивает длину сообщения — режем по 4096 символов
     if len(safe_answer) > TG_MESSAGE_LIMIT:
