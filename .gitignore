@@ -1,0 +1,47 @@
+# Виртуальное окружение
+.venv/
+venv/
+env/
+ENV/
+
+# Переменные окружения (секреты)
+.env
+.env.local
+.env.*.local
+
+# Память диалогов агента (создаётся в рантайме по chat_id)
+memory.json
+memory_*.json
+
+# Сгенерированные QR-коды
+qrcodes/
+
+# Кэш Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Артефакты сборки / пакетов
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Инструменты и IDE
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.idea/
+.vscode/
+
+# ОС
+.DS_Store
+Thumbs.db
+
+# Логи
+*.log
+logs/
